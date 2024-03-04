@@ -21,6 +21,7 @@
             clippy
             rust-analyzer
             rustfmt
+            openssl
           ];
           # Environment variables
           RUST_SRC_PATH = rustPlatform.rustLibSrc;
