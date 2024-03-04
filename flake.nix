@@ -1,5 +1,5 @@
 {
-  description = "A devShell example";
+  description = "Simple Mikrotik DDNS";
 
   inputs = {
     flake-utils.url  = "github:numtide/flake-utils";
@@ -25,7 +25,6 @@
           ];
           # Environment variables
           RUST_SRC_PATH = rustPlatform.rustLibSrc;
-          LD_LIBRARY_PATH = "${openssl.out}/lib:${zlib}/lib:${systemd}/lib";
         };
         packages.default = rustPlatform.buildRustPackage {
           pname = manifest.name;
@@ -34,7 +33,7 @@
           cargoLock.lockFile = ./Cargo.lock;
           # cargoSha256 = "sha256-kDOopnsFzshSXsA6XGpcMsJ92Rno4pqBQkZ5ES54JbM="; #lib.fakeSha256;
           nativeBuildInputs = [ pkg-config ];
-          buildInputs = [ systemd openssl libssh2 ];
+          buildInputs = [ openssl ];
         };
         apps.default = flake-utils.lib.mkApp {
           drv = self.packages.${system}.default;
