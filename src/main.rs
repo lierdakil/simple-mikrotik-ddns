@@ -1,4 +1,4 @@
-use std::{collections::HashMap, net::Ipv4Addr};
+use std::{collections::HashMap, fmt::Display, net::Ipv4Addr};
 
 use anyhow::Result;
 use clap::Parser;
@@ -41,13 +41,41 @@ fn serde_boolean<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool, D::
 
 #[derive(serde::Deserialize)]
 struct Handler {
-    #[serde(deserialize_with = "serde_name")]
-    my_zone: Name,
+    my_zone: SerName,
     username: String,
     password: String,
     hostname: String,
     #[serde(default)]
     allow_wildcard: bool,
+    #[serde(default = "static_timeout_default")]
+    static_timeout: u32,
+    #[serde(default = "dynamic_timeout_default")]
+    dynamic_timeout: u32,
+    #[serde(default)]
+    static_records: HashMap<String, Ipv4Addr>,
+}
+
+const fn static_timeout_default() -> u32 {
+    3600 * 24
+}
+
+const fn dynamic_timeout_default() -> u32 {
+    60
+}
+
+#[derive(serde::Deserialize, PartialEq, Eq, Hash)]
+struct SerName(#[serde(deserialize_with = "serde_name")] Name);
+
+impl Display for SerName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl SerName {
+    pub fn name(&self) -> &Name {
+        &self.0
+    }
 }
 
 fn serde_name<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Name, D::Error> {
@@ -78,7 +106,7 @@ impl Handler {
         let name = request.query().name();
 
         anyhow::ensure!(
-            LowerName::new(&self.my_zone).zone_of(name),
+            LowerName::new(self.my_zone.name()).zone_of(name),
             "only {} zone is supported, got {name}",
             self.my_zone,
         );
@@ -90,11 +118,24 @@ impl Handler {
 
         info!("Got request for {}", name);
 
-        let builder = MessageResponseBuilder::from_message_request(request);
+        fn check_name(allow_wildcard: bool, host_name: &Name, req_name: &LowerName) -> bool {
+            if allow_wildcard {
+                LowerName::new(host_name).zone_of(req_name)
+            } else {
+                &LowerName::new(host_name) == req_name
+            }
+        }
 
-        let mut header = Header::response_from_request(request.header());
-
-        header.set_authoritative(true);
+        for (name, ip) in self.static_records.iter() {
+            let host_name = Name::from_str_relaxed(name)?.append_domain(self.my_zone.name())?;
+            debug!("Trying static name {host_name} with address {ip}");
+            if check_name(self.allow_wildcard, &host_name, request.query().name()) {
+                debug!("Matched on {host_name}!");
+                return self
+                    .send_response(response_handler, request, *ip, self.static_timeout)
+                    .await;
+            }
+        }
 
         let client = reqwest::Client::new();
         let resp: Vec<Info> = client
@@ -117,41 +158,53 @@ impl Handler {
         for r in resp {
             debug!("Trying {r:?}...");
             if let Ok(host_name) = Name::from_str_relaxed(r.host_name) {
-                let host_name = host_name.append_domain(&self.my_zone)?;
+                let host_name = host_name.append_domain(self.my_zone.name())?;
                 debug!("Constructed FDQN {host_name}");
-                fn check_name(
-                    allow_wildcard: bool,
-                    host_name: &Name,
-                    req_name: &LowerName,
-                ) -> bool {
-                    if allow_wildcard {
-                        LowerName::new(host_name).zone_of(req_name)
-                    } else {
-                        &LowerName::new(host_name) == req_name
-                    }
-                }
                 if check_name(self.allow_wildcard, &host_name, request.query().name()) {
                     debug!("Matched query!");
-                    let timeout = if r.dynamic { 60 } else { 3600 * 24 };
+                    let timeout = if r.dynamic {
+                        self.dynamic_timeout
+                    } else {
+                        self.static_timeout
+                    };
 
-                    info!("Sending response {} with timeout {}", &r.address, &timeout);
-
-                    let records = vec![Record::from_rdata(
-                        request.query().name().into(),
-                        timeout,
-                        RData::A(r.address.into()),
-                    )];
-
-                    let response = builder.build(header, records.iter(), &[], &[], &[]);
-
-                    debug!("Sending response {:?}", &response);
-
-                    return Ok(response_handler.send_response(response).await?);
+                    return self
+                        .send_response(response_handler, request, r.address, timeout)
+                        .await;
                 }
             }
         }
 
-        let response = builder.build(header, &[], &[], &[], &[]);
+        let response = MessageResponseBuilder::from_message_request(request)
+            .build_no_records(Header::response_from_request(request.header()));
+
+        Ok(response_handler.send_response(response).await?)
+    }
+
+    async fn send_response(
+        &self,
+        response_handler: &mut impl ResponseHandler,
+        request: &Request,
+        address: Ipv4Addr,
+        timeout: u32,
+    ) -> Result<ResponseInfo> {
+        let builder = MessageResponseBuilder::from_message_request(request);
+
+        let mut header = Header::response_from_request(request.header());
+
+        header.set_authoritative(true);
+
+        info!("Sending response {} with timeout {}", address, &timeout);
+
+        let records = vec![Record::from_rdata(
+            request.query().name().into(),
+            timeout,
+            RData::A(address.into()),
+        )];
+
+        let response = builder.build(header, records.iter(), &[], &[], &[]);
+
+        debug!("Sending response {:?}", &response);
 
         Ok(response_handler.send_response(response).await?)
     }
