@@ -111,10 +111,10 @@ impl Handler {
             self.my_zone,
         );
 
-        anyhow::ensure!(
-            request.query().query_type() == RecordType::A,
-            "only A requests are supported"
-        );
+        if request.query().query_type() != RecordType::A {
+            // only A requests are supported
+            return Self::empty_response(response_handler, request).await;
+        }
 
         info!("Got request for {}", name);
 
@@ -175,10 +175,7 @@ impl Handler {
             }
         }
 
-        let response = MessageResponseBuilder::from_message_request(request)
-            .build_no_records(Header::response_from_request(request.header()));
-
-        Ok(response_handler.send_response(response).await?)
+        Self::empty_response(response_handler, request).await
     }
 
     async fn send_response(
@@ -205,6 +202,16 @@ impl Handler {
         let response = builder.build(header, records.iter(), &[], &[], &[]);
 
         debug!("Sending response {:?}", &response);
+
+        Ok(response_handler.send_response(response).await?)
+    }
+
+    async fn empty_response(
+        response_handler: &mut impl ResponseHandler,
+        request: &Request,
+    ) -> Result<ResponseInfo> {
+        let response = MessageResponseBuilder::from_message_request(request)
+            .build_no_records(Header::response_from_request(request.header()));
 
         Ok(response_handler.send_response(response).await?)
     }
