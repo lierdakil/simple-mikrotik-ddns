@@ -26,3 +26,5 @@ Use at your own risk.
     router = "192.168.0.1"
     ```
 3. Run the binary: `simple-mikrotik-ddns -c /path/to/config.toml -l 127.0.0.1:53`.
+
+The intention is to run this behind a caching resolver, e.g. Unbound, dnscrypt-proxy, etc, and to point only the local zone to this server. Trying to resolve any other zone will result in SERVFAIL.
