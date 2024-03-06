@@ -24,6 +24,9 @@ Use at your own risk.
 
     [static_records] # optional static records host = "address"
     router = "192.168.0.1"
+
+    [name_overrides] # override name based on mac address; NB: case sensitive
+    "00:B0:D0:63:C2:26" = "overriden-device-name"
     ```
 3. Run the binary: `simple-mikrotik-ddns -c /path/to/config.toml -l 127.0.0.1:53`.
 

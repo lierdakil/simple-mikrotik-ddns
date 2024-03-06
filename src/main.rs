@@ -26,6 +26,8 @@ struct Info {
     host_name: String,
     #[serde(deserialize_with = "serde_boolean")]
     dynamic: bool,
+    #[serde(rename = "active-mac-address")]
+    active_mac_address: String,
 }
 
 fn serde_boolean<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
@@ -53,6 +55,8 @@ struct Handler {
     dynamic_timeout: u32,
     #[serde(default)]
     static_records: HashMap<String, Ipv4Addr>,
+    #[serde(default)]
+    name_overrides: HashMap<String, String>,
 }
 
 const fn static_timeout_default() -> u32 {
@@ -146,7 +150,10 @@ impl Handler {
             .basic_auth(&self.username, Some(&self.password))
             .json(&HashMap::from([
                 (".query", ["status=bound"]),
-                (".proplist", ["address,host-name,dynamic"]),
+                (
+                    ".proplist",
+                    ["address,host-name,dynamic,active-mac-address"],
+                ),
             ]))
             .send()
             .await?
@@ -157,7 +164,11 @@ impl Handler {
 
         for r in resp {
             debug!("Trying {r:?}...");
-            if let Ok(host_name) = Name::from_str_relaxed(r.host_name) {
+            let host_name = self
+                .name_overrides
+                .get(&r.active_mac_address)
+                .unwrap_or(&r.host_name);
+            if let Ok(host_name) = Name::from_str_relaxed(host_name) {
                 let host_name = host_name.append_domain(self.my_zone.name())?;
                 debug!("Constructed FDQN {host_name}");
                 if check_name(self.allow_wildcard, &host_name, request.query().name()) {
