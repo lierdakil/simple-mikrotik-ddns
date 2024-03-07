@@ -17,6 +17,7 @@ use hickory_server::{
 };
 use log::{debug, error, info};
 use serde::Deserializer;
+use std::time::Duration;
 use tokio::net::UdpSocket;
 
 #[derive(serde::Deserialize, Debug)]
@@ -28,6 +29,9 @@ struct Info {
     dynamic: bool,
     #[serde(rename = "active-mac-address")]
     active_mac_address: String,
+    #[serde(rename = "expires-after")]
+    #[serde(with = "humantime_serde")]
+    expires_after: Duration,
 }
 
 fn serde_boolean<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
@@ -51,8 +55,6 @@ struct Handler {
     allow_wildcard: bool,
     #[serde(default = "static_timeout_default")]
     static_timeout: u32,
-    #[serde(default = "dynamic_timeout_default")]
-    dynamic_timeout: u32,
     #[serde(default)]
     static_records: HashMap<String, Ipv4Addr>,
     #[serde(default)]
@@ -61,10 +63,6 @@ struct Handler {
 
 const fn static_timeout_default() -> u32 {
     3600 * 24
-}
-
-const fn dynamic_timeout_default() -> u32 {
-    60
 }
 
 #[derive(serde::Deserialize, PartialEq, Eq, Hash)]
@@ -142,6 +140,7 @@ impl Handler {
         }
 
         let client = reqwest::Client::new();
+        let fields = serde_aux::serde_introspection::serde_introspect::<Info>().join(",");
         let resp: Vec<Info> = client
             .post(format!(
                 "http://{}/rest/ip/dhcp-server/lease/print",
@@ -150,10 +149,7 @@ impl Handler {
             .basic_auth(&self.username, Some(&self.password))
             .json(&HashMap::from([
                 (".query", ["status=bound"]),
-                (
-                    ".proplist",
-                    ["address,host-name,dynamic,active-mac-address"],
-                ),
+                (".proplist", [&fields]),
             ]))
             .send()
             .await?
@@ -174,7 +170,7 @@ impl Handler {
                 if check_name(self.allow_wildcard, &host_name, request.query().name()) {
                     debug!("Matched query!");
                     let timeout = if r.dynamic {
-                        self.dynamic_timeout
+                        r.expires_after.as_secs().try_into().unwrap_or(u32::MAX)
                     } else {
                         self.static_timeout
                     };

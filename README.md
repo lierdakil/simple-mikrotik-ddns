@@ -20,7 +20,6 @@ Use at your own risk.
     # with "host"; false will require exact match. Default false.
     static_timeout = 86400 # DNS record timeout for static records in seconds;
     # default 1 day
-    dynamic_timeout = 60 # for dynamic records, default 60 seconds
 
     [static_records] # optional static records host = "address"
     router = "192.168.0.1"
