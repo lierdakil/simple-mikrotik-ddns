@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Display, net::Ipv4Addr};
+use std::{collections::HashMap, fmt::Display, hash::Hash, net::Ipv4Addr};
 
 use anyhow::Result;
 use clap::Parser;
@@ -21,15 +21,13 @@ use std::time::Duration;
 use tokio::net::UdpSocket;
 
 #[derive(serde::Deserialize, Debug)]
+#[serde(rename_all = "kebab-case")]
 struct Info {
     address: Ipv4Addr,
-    #[serde(rename = "host-name")]
     host_name: String,
     #[serde(deserialize_with = "serde_boolean")]
     dynamic: bool,
-    #[serde(rename = "active-mac-address")]
-    active_mac_address: String,
-    #[serde(rename = "expires-after")]
+    active_mac_address: CaseInsensitiveString,
     #[serde(with = "humantime_serde")]
     expires_after: Duration,
 }
@@ -56,16 +54,35 @@ struct Handler {
     #[serde(default = "static_timeout_default")]
     static_timeout: u32,
     #[serde(default)]
-    static_records: HashMap<String, Ipv4Addr>,
+    static_records: HashMap<SerName, Ipv4Addr>,
     #[serde(default)]
-    name_overrides: HashMap<String, String>,
+    name_overrides: HashMap<CaseInsensitiveString, String>,
 }
 
 const fn static_timeout_default() -> u32 {
     3600 * 24
 }
 
+#[derive(serde::Deserialize, Debug)]
+#[serde(transparent)]
+struct CaseInsensitiveString(String);
+
+impl Hash for CaseInsensitiveString {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.to_lowercase().hash(state)
+    }
+}
+
+impl PartialEq for CaseInsensitiveString {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.to_lowercase().eq(&other.0.to_lowercase())
+    }
+}
+
+impl Eq for CaseInsensitiveString {}
+
 #[derive(serde::Deserialize, PartialEq, Eq, Hash)]
+#[serde(transparent)]
 struct SerName(#[serde(deserialize_with = "serde_name")] Name);
 
 impl Display for SerName {
@@ -129,12 +146,11 @@ impl Handler {
         }
 
         for (name, ip) in self.static_records.iter() {
-            let host_name = Name::from_str_relaxed(name)?.append_domain(self.my_zone.name())?;
+            let host_name = name.name().clone().append_domain(self.my_zone.name())?;
             debug!("Trying static name {host_name} with address {ip}");
             if check_name(self.allow_wildcard, &host_name, request.query().name()) {
                 debug!("Matched on {host_name}!");
-                return self
-                    .send_response(response_handler, request, *ip, self.static_timeout)
+                return Self::send_response(response_handler, request, *ip, self.static_timeout)
                     .await;
             }
         }
@@ -175,8 +191,7 @@ impl Handler {
                         self.static_timeout
                     };
 
-                    return self
-                        .send_response(response_handler, request, r.address, timeout)
+                    return Self::send_response(response_handler, request, r.address, timeout)
                         .await;
                 }
             }
@@ -186,7 +201,6 @@ impl Handler {
     }
 
     async fn send_response(
-        &self,
         response_handler: &mut impl ResponseHandler,
         request: &Request,
         address: Ipv4Addr,
