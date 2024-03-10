@@ -24,7 +24,7 @@ use tokio::net::UdpSocket;
 #[serde(rename_all = "kebab-case")]
 struct Info {
     address: Ipv4Addr,
-    host_name: String,
+    host_name: Option<String>,
     #[serde(deserialize_with = "serde_boolean")]
     dynamic: bool,
     active_mac_address: CaseInsensitiveString,
@@ -176,10 +176,14 @@ impl Handler {
 
         for r in resp {
             debug!("Trying {r:?}...");
-            let host_name = self
+            let Some(host_name) = self
                 .name_overrides
                 .get(&r.active_mac_address)
-                .unwrap_or(&r.host_name);
+                .or(r.host_name.as_ref())
+            else {
+                debug!("No host name found, skipping");
+                continue;
+            };
             if let Ok(host_name) = Name::from_str_relaxed(host_name) {
                 let host_name = host_name.append_domain(self.my_zone.name())?;
                 debug!("Constructed FDQN {host_name}");
