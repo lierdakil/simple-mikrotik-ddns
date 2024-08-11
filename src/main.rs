@@ -186,7 +186,7 @@ impl Handler {
             };
             if let Ok(host_name) = Name::from_str_relaxed(host_name) {
                 let host_name = host_name.append_domain(self.my_zone.name())?;
-                debug!("Constructed FDQN {host_name}");
+                debug!("Constructed FQDN {host_name}");
                 if check_name(self.allow_wildcard, &host_name, request.query().name()) {
                     debug!("Matched query!");
                     let timeout = if r.dynamic {
