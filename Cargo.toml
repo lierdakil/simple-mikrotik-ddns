@@ -6,31 +6,31 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-anyhow = "1.0.80"
-async-trait = "0.1.77"
-hickory-server = "0.24.0"
+anyhow = "1.0.100"
+async-trait = "0.1.89"
+hickory-server = "0.25.2"
 humantime-serde = "1.1.1"
-log = "0.4.21"
+log = "0.4.28"
 pretty_env_logger = "0.5.0"
-serde-aux = "4.5.0"
-serde_json = "1.0.114"
+serde-aux = "4.7.0"
+serde_json = "1.0.145"
 
 [dependencies.serde]
-version = "1.0.197"
+version = "1.0.226"
 features = ["derive"]
 
 [dependencies.clap]
-version = "~4.4"
+version = "~4.5"
 features = ["derive"]
 
 [dependencies.reqwest]
-version = "0.11.24"
+version = "0.12.23"
 features = ["json"]
 
 [dependencies.figment]
-version = "0.10.14"
+version = "0.10.19"
 features = ["toml", "env"]
 
 [dependencies.tokio]
-version = "1.36.0"
+version = "1.47.1"
 features = ["full"]

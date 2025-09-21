@@ -22,6 +22,7 @@
             rust-analyzer
             rustfmt
             openssl
+            pkg-config
           ];
           # Environment variables
           RUST_SRC_PATH = rustPlatform.rustLibSrc;

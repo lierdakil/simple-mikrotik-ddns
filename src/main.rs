@@ -122,7 +122,9 @@ impl Handler {
             "only query requests are allowed"
         );
 
-        let name = request.query().name();
+        let info = request.request_info()?;
+
+        let name = info.query.name();
 
         anyhow::ensure!(
             LowerName::new(self.my_zone.name()).zone_of(name),
@@ -130,7 +132,7 @@ impl Handler {
             self.my_zone,
         );
 
-        if request.query().query_type() != RecordType::A {
+        if !matches!(info.query.query_type(), RecordType::A) {
             // only A requests are supported
             return Self::empty_response(response_handler, request).await;
         }
@@ -148,7 +150,7 @@ impl Handler {
         for (name, ip) in self.static_records.iter() {
             let host_name = name.name().clone().append_domain(self.my_zone.name())?;
             debug!("Trying static name {host_name} with address {ip}");
-            if check_name(self.allow_wildcard, &host_name, request.query().name()) {
+            if check_name(self.allow_wildcard, &host_name, info.query.name()) {
                 debug!("Matched on {host_name}!");
                 return Self::send_response(response_handler, request, *ip, self.static_timeout)
                     .await;
@@ -187,7 +189,7 @@ impl Handler {
             if let Ok(host_name) = Name::from_str_relaxed(host_name) {
                 let host_name = host_name.append_domain(self.my_zone.name())?;
                 debug!("Constructed FQDN {host_name}");
-                if check_name(self.allow_wildcard, &host_name, request.query().name()) {
+                if check_name(self.allow_wildcard, &host_name, info.query.name()) {
                     debug!("Matched query!");
                     let timeout = if r.dynamic {
                         r.expires_after.as_secs().try_into().unwrap_or(u32::MAX)
@@ -212,6 +214,8 @@ impl Handler {
     ) -> Result<ResponseInfo> {
         let builder = MessageResponseBuilder::from_message_request(request);
 
+        let info = request.request_info()?;
+
         let mut header = Header::response_from_request(request.header());
 
         header.set_authoritative(true);
@@ -219,7 +223,7 @@ impl Handler {
         info!("Sending response {} with timeout {}", address, &timeout);
 
         let records = vec![Record::from_rdata(
-            request.query().name().into(),
+            info.query.name().into(),
             timeout,
             RData::A(address.into()),
         )];
