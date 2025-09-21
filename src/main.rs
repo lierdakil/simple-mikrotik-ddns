@@ -1,4 +1,9 @@
-use std::{collections::HashMap, fmt::Display, hash::Hash, net::Ipv4Addr};
+use std::{
+    collections::HashMap,
+    fmt::Display,
+    hash::Hash,
+    net::{IpAddr, Ipv4Addr},
+};
 
 use anyhow::Result;
 use clap::Parser;
@@ -10,7 +15,7 @@ use hickory_server::{
     authority::MessageResponseBuilder,
     proto::{
         op::{Header, MessageType, OpCode, ResponseCode},
-        rr::{LowerName, Name, RData, Record, RecordType},
+        rr::{rdata::PTR, LowerName, Name, RData, Record, RecordType},
     },
     server::{Request, RequestHandler, ResponseHandler, ResponseInfo},
     ServerFuture,
@@ -127,33 +132,72 @@ impl Handler {
         let name = info.query.name();
 
         anyhow::ensure!(
-            LowerName::new(self.my_zone.name()).zone_of(name),
-            "only {} zone is supported, got {name}",
+            LowerName::new(self.my_zone.name()).zone_of(name)
+                || LowerName::new(&Name::from_ascii("in-addr.arpa.").unwrap()).zone_of(name),
+            "only {} zone or PTR queries are supported, got {name}",
             self.my_zone,
         );
 
-        if !matches!(info.query.query_type(), RecordType::A) {
+        let query_type = info.query.query_type();
+
+        if !matches!(query_type, RecordType::A | RecordType::PTR) {
             // only A requests are supported
             return Self::empty_response(response_handler, request).await;
         }
 
         info!("Got request for {}", name);
 
-        fn check_name(allow_wildcard: bool, host_name: &Name, req_name: &LowerName) -> bool {
-            if allow_wildcard {
-                LowerName::new(host_name).zone_of(req_name)
-            } else {
-                &LowerName::new(host_name) == req_name
-            }
+        enum Check<L, R> {
+            Name(L),
+            Addr(R),
         }
+
+        let check = match query_type {
+            RecordType::A => Check::Name(|host_name: &Name| {
+                if self.allow_wildcard {
+                    LowerName::new(host_name).zone_of(name)
+                } else {
+                    &LowerName::new(host_name) == name
+                }
+            }),
+            RecordType::PTR => Check::Addr({
+                let req = name.parse_arpa_name()?;
+                move |ip: Ipv4Addr| req.addr() == IpAddr::V4(ip)
+            }),
+            _ => {
+                // unsupported request
+                return Self::empty_response(response_handler, request).await;
+            }
+        };
 
         for (name, ip) in self.static_records.iter() {
             let host_name = name.name().clone().append_domain(self.my_zone.name())?;
             debug!("Trying static name {host_name} with address {ip}");
-            if check_name(self.allow_wildcard, &host_name, info.query.name()) {
-                debug!("Matched on {host_name}!");
-                return Self::send_response(response_handler, request, *ip, self.static_timeout)
-                    .await;
+            match check {
+                Check::Name(check_name) => {
+                    if check_name(&host_name) {
+                        debug!("Matched on {host_name}!");
+                        return Self::send_response(
+                            response_handler,
+                            request,
+                            RData::A((*ip).into()),
+                            self.static_timeout,
+                        )
+                        .await;
+                    }
+                }
+                Check::Addr(check_addr) => {
+                    if check_addr(*ip) {
+                        debug!("Matched on {ip}!");
+                        return Self::send_response(
+                            response_handler,
+                            request,
+                            RData::PTR(PTR(host_name)),
+                            self.static_timeout,
+                        )
+                        .await;
+                    }
+                }
             }
         }
 
@@ -189,16 +233,36 @@ impl Handler {
             if let Ok(host_name) = Name::from_str_relaxed(host_name) {
                 let host_name = host_name.append_domain(self.my_zone.name())?;
                 debug!("Constructed FQDN {host_name}");
-                if check_name(self.allow_wildcard, &host_name, info.query.name()) {
-                    debug!("Matched query!");
-                    let timeout = if r.dynamic {
-                        r.expires_after.as_secs().try_into().unwrap_or(u32::MAX)
-                    } else {
-                        self.static_timeout
-                    };
-
-                    return Self::send_response(response_handler, request, r.address, timeout)
-                        .await;
+                let timeout = if r.dynamic {
+                    r.expires_after.as_secs().try_into().unwrap_or(u32::MAX)
+                } else {
+                    self.static_timeout
+                };
+                match check {
+                    Check::Name(check_name) => {
+                        if check_name(&host_name) {
+                            debug!("Matched query for {host_name}!");
+                            return Self::send_response(
+                                response_handler,
+                                request,
+                                RData::A(r.address.into()),
+                                timeout,
+                            )
+                            .await;
+                        }
+                    }
+                    Check::Addr(check_addr) => {
+                        if check_addr(r.address) {
+                            debug!("Matched query for {}!", r.address);
+                            return Self::send_response(
+                                response_handler,
+                                request,
+                                RData::PTR(PTR(host_name)),
+                                timeout,
+                            )
+                            .await;
+                        }
+                    }
                 }
             }
         }
@@ -209,7 +273,7 @@ impl Handler {
     async fn send_response(
         response_handler: &mut impl ResponseHandler,
         request: &Request,
-        address: Ipv4Addr,
+        response: RData,
         timeout: u32,
     ) -> Result<ResponseInfo> {
         let builder = MessageResponseBuilder::from_message_request(request);
@@ -220,12 +284,12 @@ impl Handler {
 
         header.set_authoritative(true);
 
-        info!("Sending response {} with timeout {}", address, &timeout);
+        info!("Sending response {} with timeout {}", response, &timeout);
 
         let records = vec![Record::from_rdata(
             info.query.name().into(),
             timeout,
-            RData::A(address.into()),
+            response,
         )];
 
         let response = builder.build(header, records.iter(), &[], &[], &[]);
